@@ -3,12 +3,14 @@ export const TOURVISOR_BASE_URL = "https://api.tourvisor.ru/search/api/v1";
 export class TourvisorError extends Error {
   code: string;
   status: number | undefined;
+  stage: string | undefined;
 
-  constructor(message: string, code: string, status?: number) {
+  constructor(message: string, code: string, status?: number, stage?: string) {
     super(message);
     this.name = "TourvisorError";
     this.code = code;
     this.status = status;
+    this.stage = stage;
   }
 }
 
@@ -137,6 +139,20 @@ async function tvFetch(
   }
 
   if (!res.ok) {
+    if (res.status === 400) {
+      const body = await res.clone().json().catch(() => null);
+      const safeError: Record<string, unknown> = {
+        stage: "tour_search",
+        http_status: res.status,
+      };
+      if (body && typeof body === "object" && !Array.isArray(body)) {
+        const record = body as Record<string, unknown>;
+        for (const field of ["code", "error", "message", "detail", "details"]) {
+          if (field in record) safeError[field] = record[field];
+        }
+      }
+      console.error(JSON.stringify(safeError));
+    }
     const safeMessage = `Tourvisor API returned HTTP ${res.status}`;
     throw new TourvisorError(safeMessage, "HTTP_ERROR", res.status);
   }
@@ -151,6 +167,10 @@ export async function startSearch(
   const fetchFn = options.fetchFn ?? defaultFetch;
   const params = buildTourvisorParams(input);
   const url = buildUrl(baseUrl, "/tours/search", params);
+  console.error(JSON.stringify({
+    stage: "start_search",
+    query_string: params.toString(),
+  }));
 
   const res = await tvFetch(url, options.jwt, fetchFn, options.signal);
   const body = await res.json() as Record<string, unknown>;

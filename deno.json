@@ -23,7 +23,8 @@
     }
   },
   "tasks": {
-    "test": "deno test --allow-read",
+    "test": "deno test --allow-read --allow-env=OPENROUTER_API_KEY,OPENROUTER_MODEL",
+"test:full": "deno test --allow-read --allow-env",
     "check": "deno check supabase/functions/**/*.ts",
     "fmt:check": "deno fmt --check",
     "lint": "deno lint"
