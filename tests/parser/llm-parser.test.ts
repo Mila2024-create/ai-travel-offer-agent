@@ -111,6 +111,60 @@ Deno.test("2. finish_reason=length throws truncated error before JSON.parse", as
   }
 });
 
+Deno.test("date without year uses nearest future year", async () => {
+  const origKey = Deno.env.get("OPENROUTER_API_KEY");
+  const origModel = Deno.env.get("OPENROUTER_MODEL");
+  try {
+    Deno.env.set("OPENROUTER_API_KEY", "test-key");
+    Deno.env.set("OPENROUTER_MODEL", "test-model");
+    const llmResult = { ...VALID_PARSED, date_from: "2025-09-10", date_to: "2025-09-19" };
+    let systemPrompt = "";
+    const dateFetch: typeof fetch = (input, init) => {
+      const requestBody = JSON.parse(String(init?.body ?? "{}"));
+      systemPrompt = String(requestBody.messages?.[0]?.content ?? "");
+      return mockOpenRouter(llmResult)(input, init);
+    };
+
+    const september2026 = await parseText(
+      "Из Москвы в Турцию с 10 сентября на 10 дней 2 взрослых",
+      dateFetch,
+      new Date("2026-08-01T00:00:00Z"),
+    );
+    assert.strictEqual(september2026.date_from, "2026-09-10");
+    assert.strictEqual(september2026.date_to, "2026-09-19");
+    assert.ok(systemPrompt.includes("Текущая дата: 2026-08-01"));
+
+    const september2027 = await parseText(
+      "Из Москвы в Турцию с 10 сентября на 10 дней 2 взрослых",
+      mockOpenRouter(llmResult),
+      new Date("2026-10-01T00:00:00Z"),
+    );
+    assert.strictEqual(september2027.date_from, "2027-09-10");
+    assert.strictEqual(september2027.date_to, "2027-09-19");
+  } finally {
+    if (origKey) Deno.env.set("OPENROUTER_API_KEY", origKey);
+    else Deno.env.delete("OPENROUTER_API_KEY");
+    if (origModel) Deno.env.set("OPENROUTER_MODEL", origModel);
+    else Deno.env.delete("OPENROUTER_MODEL");
+  }
+});
+
+Deno.test("explicit past year returns date clarification before Tourvisor", async () => {
+  const parsed = { ...VALID_PARSED, date_from: "2025-09-10", date_to: "2025-09-19" };
+  let externalCalls = 0;
+  const resolver = new DictionaryResolver("jwt", () => {
+    externalCalls += 1;
+    return Promise.reject(new Error("external call must not happen"));
+  });
+  const result = await validateAndResolve(parsed, resolver, new Date("2026-08-01T00:00:00Z"));
+  assert.strictEqual(result.ok, false);
+  if (!result.ok) {
+    assert.strictEqual(result.needs_clarification.field, "date_from");
+    assert.ok(result.needs_clarification.question.includes("прошла"));
+  }
+  assert.strictEqual(externalCalls, 0);
+});
+
 Deno.test("3. missing budget returns one clarification question", async () => {
   const parsed = { ...VALID_PARSED, budget: null, budget_mode: "not_specified" as const };
   const resolver = new DictionaryResolver("jwt", mockDictFetch());

@@ -29,12 +29,24 @@ const CRITICAL_FIELDS: Array<{ field: keyof ParsedRequest; question: string }> =
 export async function validateAndResolve(
   parsed: ParsedRequest,
   resolver: DictionaryResolver,
+  currentDate = new Date(),
 ): Promise<ValidationResult> {
   for (const { field, question } of CRITICAL_FIELDS) {
     const val = parsed[field];
     if (!val || (typeof val === "string" && val.trim().length === 0)) {
       return { ok: false, needs_clarification: { field: field as string, question } };
     }
+  }
+
+  const today = currentDate.toISOString().slice(0, 10);
+  if (parsed.date_from < today || parsed.date_to < today) {
+    return {
+      ok: false,
+      needs_clarification: {
+        field: "date_from",
+        question: "Указанная дата уже прошла. Уточните будущую дату поездки.",
+      },
+    };
   }
 
   if (parsed.budget_mode === "not_specified" && parsed.budget == null) {

@@ -95,6 +95,38 @@ const PARSER_SCHEMA = {
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
+function formatIsoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function hasExplicitYear(text: string): boolean {
+  return /\b(?:19|20)\d{2}\b/.test(text);
+}
+
+function shiftIsoYear(value: string, years: number): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return value;
+  return `${Number(match[1]) + years}-${match[2]}-${match[3]}`;
+}
+
+function normalizeImplicitYear(
+  parsed: Record<string, unknown>,
+  text: string,
+  currentDate: Date,
+): void {
+  if (hasExplicitYear(text)) return;
+  const dateFrom = String(parsed.date_from ?? "");
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateFrom);
+  if (!match) return;
+  const today = formatIsoDate(currentDate);
+  const monthDay = `${match[2]}-${match[3]}`;
+  const currentYear = Number(today.slice(0, 4));
+  const targetYear = monthDay >= today.slice(5) ? currentYear : currentYear + 1;
+  const years = targetYear - Number(match[1]);
+  parsed.date_from = shiftIsoYear(dateFrom, years);
+  parsed.date_to = shiftIsoYear(String(parsed.date_to ?? ""), years);
+}
+
 function getConfig(): { apiKey: string; model: string } {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY");
   const model = Deno.env.get("OPENROUTER_MODEL");
@@ -126,14 +158,21 @@ const SYSTEM_PROMPT = `Ты — помощник для поиска туров.
 11. Отель: если не указаны звёзды или рейтинг — ставь null.
 12. Не выдумывай значения, которых нет в тексте.`;
 
-export async function parseText(text: string, fetchFn?: typeof fetch): Promise<ParsedRequest> {
+export async function parseText(
+  text: string,
+  fetchFn?: typeof fetch,
+  currentDate = new Date(),
+): Promise<ParsedRequest> {
   const { apiKey, model } = getConfig();
   const doFetch = fetchFn ?? fetch;
 
   const body = {
     model,
     messages: [
-      { role: "system", content: SYSTEM_PROMPT },
+      {
+        role: "system",
+        content: `${SYSTEM_PROMPT}\n\nТекущая дата: ${formatIsoDate(currentDate)}. Если год не указан, используй ближайшую будущую дату.`,
+      },
       { role: "user", content: text },
     ],
     response_format: {
@@ -191,6 +230,7 @@ export async function parseText(text: string, fetchFn?: typeof fetch): Promise<P
   } catch {
     throw new Error("OpenRouter returned invalid JSON");
   }
+  normalizeImplicitYear(parsed, text, currentDate);
 
   return {
     departure: String(parsed.departure ?? ""),

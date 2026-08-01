@@ -12,6 +12,7 @@ export type HandlerConfig = {
   tourvisorJwt?: string;
   fetchFn?: typeof fetch;
   sleepFn?: (ms: number) => Promise<void>;
+  currentDate?: Date;
 };
 
 type TextRequestBody = {
@@ -91,8 +92,9 @@ export async function handleTravelOfferTextRequest(
   }
 
   let parsed: ParsedRequest;
+  const currentDate = config?.currentDate ?? new Date();
   try {
-    parsed = await parseText(body.text, config?.fetchFn);
+    parsed = await parseText(body.text, config?.fetchFn, currentDate);
     safeLog({ stage: "parsed", departure: parsed.departure });
   } catch (e) {
     if (e instanceof ParserConfigError) {
@@ -123,7 +125,7 @@ export async function handleTravelOfferTextRequest(
 
   let validation;
   try {
-    validation = await validateAndResolve(parsed, resolver);
+    validation = await validateAndResolve(parsed, resolver, currentDate);
   } catch (e) {
     const err = e as Error;
     safeLog({
