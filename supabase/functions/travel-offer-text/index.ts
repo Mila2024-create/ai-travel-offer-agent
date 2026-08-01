@@ -166,6 +166,12 @@ export async function handleTravelOfferTextRequest(
     currency: "RUB",
     charter_only: true,
   };
+  const effectivePriceTo = spikeRequest.budget_max != null && spikeRequest.budget_mode === "soft"
+    ? Math.round(spikeRequest.budget_max * 1.1)
+    : spikeRequest.budget_max;
+  if (effectivePriceTo !== spikeRequest.budget_max) {
+    searchInput.budget_max = effectivePriceTo;
+  }
   const contractParams = {
     departureId: searchInput.departure_id,
     countryId: searchInput.country_id,
@@ -178,7 +184,7 @@ export async function handleTravelOfferTextRequest(
     ...(searchInput.meal_id != null ? { meal: searchInput.meal_id } : {}),
     ...(searchInput.hotel_category != null ? { hotelCategory: searchInput.hotel_category } : {}),
     ...(searchInput.hotel_rating != null ? { hotelRating: searchInput.hotel_rating } : {}),
-    ...(searchInput.budget_max != null ? { priceTo: searchInput.budget_max } : {}),
+    ...(effectivePriceTo != null ? { priceTo: effectivePriceTo } : {}),
     currency: searchInput.currency,
     onlyCharter: searchInput.charter_only,
   };
@@ -214,10 +220,12 @@ export async function handleTravelOfferTextRequest(
       searchInput,
       { jwt, fetchFn: config?.fetchFn, sleepFn: config?.sleepFn },
     );
+    safeLog({ stage: "tour_results", candidate_count: results.length, warning_count: warnings.length });
 
     const spikeTours = tourCandidateToSpikeTour(results, resolved.country.id);
     const pipelineResult = runPipelineWithCandidates(spikeRequest, spikeTours);
     pipelineResult.warnings.push(...warnings);
+    safeLog({ stage: "pipeline_result", ranked_count: pipelineResult.ranked_tours.length, warnings: pipelineResult.warnings.length });
     const offer = buildOffer(pipelineResult.ranked_tours);
 
     return json({

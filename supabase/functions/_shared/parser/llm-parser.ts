@@ -148,7 +148,7 @@ export async function parseText(text: string, fetchFn?: typeof fetch): Promise<P
       require_parameters: true,
     },
     temperature: 0.1,
-    max_tokens: 1024,
+    max_tokens: 4096,
   };
 
   let res: Response;
@@ -175,6 +175,9 @@ export async function parseText(text: string, fetchFn?: typeof fetch): Promise<P
   const choices = json.choices as Array<Record<string, unknown>> | undefined;
   if (!choices || choices.length === 0) {
     throw new Error("OpenRouter returned no choices");
+  }
+  if (choices[0].finish_reason === "length") {
+    throw new Error("OpenRouter output was truncated");
   }
   const message = choices[0].message as Record<string, unknown> | undefined;
   const content = message?.content as string | undefined;
