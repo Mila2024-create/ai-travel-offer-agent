@@ -52,6 +52,8 @@ function mockOpenRouter(content: unknown, finishReason = "stop"): typeof fetch {
   };
 }
 
+const CURRENT_DATE = new Date("2026-07-01T00:00:00Z");
+
 const VALID_PARSED = {
   departure: "Москва",
   country: "Турция",
@@ -74,7 +76,11 @@ Deno.test("1. parser returns validated structure", async () => {
   try {
     Deno.env.set("OPENROUTER_API_KEY", "test-key");
     Deno.env.set("OPENROUTER_MODEL", "test-model");
-    const result = await parseText("турция из москвы на август", mockOpenRouter(VALID_PARSED));
+    const result = await parseText(
+      "турция из москвы на август",
+      mockOpenRouter(VALID_PARSED),
+      CURRENT_DATE,
+    );
     assert.strictEqual(result.departure, "Москва");
     assert.strictEqual(result.country, "Турция");
     assert.strictEqual(result.date_from, "2026-08-01");
@@ -98,7 +104,7 @@ Deno.test("2. finish_reason=length throws truncated error before JSON.parse", as
   try {
     Deno.env.set("OPENROUTER_API_KEY", "test-key");
     Deno.env.set("OPENROUTER_MODEL", "test-model");
-    await parseText("турция из москвы", mockOpenRouter({}, "length"));
+    await parseText("турция из москвы", mockOpenRouter({}, "length"), CURRENT_DATE);
     assert.fail("Expected error");
   } catch (e) {
     const msg = (e as Error).message;
@@ -168,7 +174,7 @@ Deno.test("explicit past year returns date clarification before Tourvisor", asyn
 Deno.test("3. missing budget returns one clarification question", async () => {
   const parsed = { ...VALID_PARSED, budget: null, budget_mode: "not_specified" as const };
   const resolver = new DictionaryResolver("jwt", mockDictFetch());
-  const result = await validateAndResolve(parsed, resolver);
+  const result = await validateAndResolve(parsed, resolver, CURRENT_DATE);
   assert.strictEqual(result.ok, false);
   if (!result.ok) {
     assert.strictEqual(result.needs_clarification.field, "budget");
@@ -179,7 +185,7 @@ Deno.test("3. missing budget returns one clarification question", async () => {
 Deno.test("3. explicit no-limit gives budget_mode=unknown", async () => {
   const parsed = { ...VALID_PARSED, budget: null, budget_mode: "unknown" as const };
   const resolver = new DictionaryResolver("jwt", mockDictFetch());
-  const result = await validateAndResolve(parsed, resolver);
+  const result = await validateAndResolve(parsed, resolver, CURRENT_DATE);
   assert.strictEqual(result.ok, true);
   if (result.ok) {
     assert.strictEqual(result.request.budget_max, null);
@@ -190,7 +196,7 @@ Deno.test("3. explicit no-limit gives budget_mode=unknown", async () => {
 Deno.test("4. departure/country/meal resolve to fixture IDs", async () => {
   const parsed = { ...VALID_PARSED, budget: null, budget_mode: "unknown" as const };
   const resolver = new DictionaryResolver("jwt", mockDictFetch());
-  const result = await validateAndResolve(parsed, resolver);
+  const result = await validateAndResolve(parsed, resolver, CURRENT_DATE);
   assert.strictEqual(result.ok, true);
   if (result.ok) {
     assert.strictEqual(result.resolved.departure.id, 1);
@@ -205,7 +211,7 @@ Deno.test("4. departure/country/meal resolve to fixture IDs", async () => {
 Deno.test("5. unknown dictionary returns clarification, no searchTours", async () => {
   const parsed = { ...VALID_PARSED, country: "Марс" };
   const resolver = new DictionaryResolver("jwt", mockDictFetch());
-  const result = await validateAndResolve(parsed, resolver);
+  const result = await validateAndResolve(parsed, resolver, CURRENT_DATE);
   assert.strictEqual(result.ok, false);
   if (!result.ok) {
     assert.strictEqual(result.needs_clarification.field, "country");
@@ -219,7 +225,7 @@ Deno.test("6. missing OPENROUTER_MODEL throws ParserConfigError without secrets"
   try {
     Deno.env.set("OPENROUTER_API_KEY", "test-key");
     Deno.env.delete("OPENROUTER_MODEL");
-    await parseText("test", undefined);
+    await parseText("test", undefined, CURRENT_DATE);
     assert.fail("Expected error");
   } catch (e) {
     assert.ok(e instanceof ParserConfigError);
@@ -336,6 +342,7 @@ Deno.test("8. soft budget sends priceTo * 1.1 to Tourvisor, hard sends exact", a
     }
 
     const config: HandlerConfig = {
+      currentDate: CURRENT_DATE,
       internalApiToken: "tok",
       tourvisorJwt: "eyJhbGciOiJIUzI1NiJ9.eyJ0ZXN0IjoidGVzdCJ9.test",
       fetchFn: makeFetch({ budget: 300000, budget_mode: "soft" as const }),
@@ -353,6 +360,7 @@ Deno.test("8. soft budget sends priceTo * 1.1 to Tourvisor, hard sends exact", a
 
     tourvisorBodies.length = 0;
     const configHard: HandlerConfig = {
+      currentDate: CURRENT_DATE,
       internalApiToken: "tok",
       tourvisorJwt: "eyJhbGciOiJIUzI1NiJ9.eyJ0ZXN0IjoidGVzdCJ9.test",
       fetchFn: makeFetch({ budget: 300000, budget_mode: "hard" as const }),
@@ -370,6 +378,7 @@ Deno.test("8. soft budget sends priceTo * 1.1 to Tourvisor, hard sends exact", a
 
     tourvisorBodies.length = 0;
     const configUnknown: HandlerConfig = {
+      currentDate: CURRENT_DATE,
       internalApiToken: "tok",
       tourvisorJwt: "eyJhbGciOiJIUzI1NiJ9.eyJ0ZXN0IjoidGVzdCJ9.test",
       fetchFn: makeFetch({ budget: null, budget_mode: "unknown" as const }),
@@ -398,6 +407,7 @@ Deno.test("7. endpoint ready passes through pipeline and returns top-3", async (
     Deno.env.set("OPENROUTER_API_KEY", "test-key");
     Deno.env.set("OPENROUTER_MODEL", "test-model");
     const config: HandlerConfig = {
+      currentDate: CURRENT_DATE,
       internalApiToken: "tok",
       tourvisorJwt: "eyJhbGciOiJIUzI1NiJ9.eyJ0ZXN0IjoidGVzdCJ9.test",
       fetchFn: (input: RequestInfo | URL, init?: RequestInit) => {
