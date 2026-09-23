@@ -9,11 +9,14 @@ export type WebhookConfig = {
   internalApiToken?: string;
   backendUrl?: string;
   fetchFn?: typeof fetch;
+  backendHandler?: (request: Request) => Promise<Response>;
+  executionMode?: "request" | "edge";
 };
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
 const SPLIT_MAX_LEN = 3900;
 const CLARIFICATION_MARKER = "Исходный запрос:";
+const MAX_BODY_BYTES = 64 * 1024;
 
 function json(data: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -62,8 +65,8 @@ async function sendTelegramMessage(
     if (!res.ok) {
       console.error(JSON.stringify({ stage: "telegram_api", status: res.status }));
     }
-  } catch (e) {
-    console.error(JSON.stringify({ stage: "telegram_api", error_name: (e as Error).name }));
+  } catch {
+    console.error(JSON.stringify({ stage: "telegram_api", error: "SEND_FAILED" }));
   }
 }
 
@@ -71,7 +74,7 @@ async function callBackend(
   text: string,
   config: WebhookConfig,
 ): Promise<Record<string, unknown>> {
-  const backendUrl = config.backendUrl ??
+  const backendUrl = config.backendHandler ? "http://internal/travel-offer-text" : config.backendUrl ??
     (Deno.env.get("SUPABASE_URL")
       ? `${Deno.env.get("SUPABASE_URL")}/functions/v1/travel-offer-text`
       : "");
@@ -81,14 +84,17 @@ async function callBackend(
   }
   const internalToken = config.internalApiToken ?? Deno.env.get("INTERNAL_API_TOKEN") ?? "";
   const fetchFn = config.fetchFn ?? fetch;
-  const res = await fetchFn(backendUrl, {
+  const init: RequestInit = {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "X-Internal-Token": internalToken,
     },
     body: JSON.stringify({ text }),
-  });
+  };
+  const res = config.backendHandler
+    ? await config.backendHandler(new Request(backendUrl, init))
+    : await fetchFn(backendUrl, init);
   if (!res.ok) {
     console.error(JSON.stringify({ stage: "backend", status: res.status }));
     return { status: "error", message: "Ошибка обработки запроса." };
@@ -141,7 +147,14 @@ async function processBackendResponse(
   text: string,
   config: WebhookConfig,
 ): Promise<void> {
-  const backendResponse = await callBackend(text, config);
+  let backendResponse: Record<string, unknown>;
+  try {
+    backendResponse = await callBackend(text, config);
+  } catch {
+    console.error(JSON.stringify({ stage: "backend", error: "BACKEND_FAILED" }));
+    await sendTelegramMessage(chatId, "Ошибка обработки запроса.", config);
+    return;
+  }
 
   if (backendResponse.status === "ready") {
     const offer = backendResponse.offer as Record<string, unknown> ?? {};
@@ -180,6 +193,9 @@ export async function handleTelegramWebhook(
   request: Request,
   config?: WebhookConfig,
 ): Promise<Response> {
+  if (request.method !== "POST") {
+    return new Response(null, { status: 405, headers: { Allow: "POST" } });
+  }
   const expectedSecret = config?.webhookSecret ?? Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
   const providedSecret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
   if (!expectedSecret || providedSecret !== expectedSecret) {
@@ -188,7 +204,35 @@ export async function handleTelegramWebhook(
 
   let update: Record<string, unknown>;
   try {
-    update = await request.json() as Record<string, unknown>;
+    const reader = request.body?.getReader();
+    if (!reader) return json({ error: "Invalid request body" }, 400);
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_BODY_BYTES) {
+          await reader.cancel();
+          return json({ error: "Request body too large" }, 413);
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return json({ error: "Invalid request body" }, 400);
+    }
+    update = parsed as Record<string, unknown>;
   } catch {
     return json({ error: "Invalid request body" }, 400);
   }
@@ -200,10 +244,11 @@ export async function handleTelegramWebhook(
     internalApiToken: config?.internalApiToken ?? Deno.env.get("INTERNAL_API_TOKEN"),
     backendUrl: config?.backendUrl,
     fetchFn: config?.fetchFn ?? fetch,
+    backendHandler: config?.backendHandler,
   };
 
   const run = (): Promise<void> => processTelegramUpdate(update, resolvedConfig);
-  if (globalThis.EdgeRuntime?.waitUntil) {
+  if (config?.executionMode !== "request" && globalThis.EdgeRuntime?.waitUntil) {
     globalThis.EdgeRuntime.waitUntil(run());
   } else {
     await run();

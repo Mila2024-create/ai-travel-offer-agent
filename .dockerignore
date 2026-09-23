@@ -1,0 +1,14 @@
+**/.env
+**/.env.*
+.git
+.codex
+.agents
+**/secrets
+**/*.pem
+**/*.key
+tests
+supabase/migrations
+supabase/functions/_shared/bot-request-state.ts
+supabase/functions/_shared/potok-ingestion.ts
+supabase/functions/travel-offer
+node_modules

@@ -5,6 +5,77 @@ import {
 } from "../../supabase/functions/telegram-webhook/index.ts";
 import type { WebhookConfig } from "../../supabase/functions/telegram-webhook/index.ts";
 
+Deno.test("legacy default keeps EdgeRuntime and HTTP backend", async () => {
+  const previous = globalThis.EdgeRuntime;
+  const tasks: Promise<unknown>[] = [];
+  globalThis.EdgeRuntime = { waitUntil: (task) => { tasks.push(task); } };
+  try {
+    const { config, backendCalls } = makeTestContext();
+    const response = await handleTelegramWebhook(new Request("http://localhost/", {
+      method: "POST",
+      headers: { "X-Telegram-Bot-Api-Secret-Token": "test-webhook-secret" },
+      body: JSON.stringify(makeUpdate()),
+    }), config);
+    assert.equal(response.status, 200);
+    assert.equal(tasks.length, 1);
+    await Promise.all(tasks);
+    assert.equal(backendCalls.length, 1);
+  } finally { globalThis.EdgeRuntime = previous; }
+});
+
+Deno.test("legacy SUPABASE_URL fallback uses HTTP backend through waitUntil", async () => {
+  const previousUrl = Deno.env.get("SUPABASE_URL");
+  const previousRuntime = globalThis.EdgeRuntime;
+  const tasks: Promise<unknown>[] = [];
+  const backend = Promise.withResolvers<Response>();
+  const calls: Array<{ url: string; method?: string; headers: Headers; body: unknown }> = [];
+  globalThis.EdgeRuntime = { waitUntil: (task) => { tasks.push(task); } };
+  try {
+    Deno.env.set("SUPABASE_URL", "https://legacy-test.invalid");
+    const config: WebhookConfig = {
+      telegramBotToken: "test-bot-token",
+      webhookSecret: "test-webhook-secret",
+      allowedUserIds: "123",
+      internalApiToken: "test-internal-token",
+      // Deliberately no backendHandler, backendUrl or executionMode override.
+      fetchFn: (input, init) => {
+        calls.push({
+          url: input instanceof Request ? input.url : String(input),
+          method: init?.method,
+          headers: new Headers(init?.headers),
+          body: JSON.parse(String(init?.body)),
+        });
+        return calls.length === 1 ? backend.promise : Promise.resolve(Response.json({ ok: true }));
+      },
+    };
+    const response = await handleTelegramWebhook(new Request("http://localhost/", {
+      method: "POST",
+      headers: { "X-Telegram-Bot-Api-Secret-Token": "test-webhook-secret" },
+      body: JSON.stringify(makeUpdate({ text: "Тур" })),
+    }), config);
+    // ACK arrives while the HTTP backend is still pending.
+    assert.equal(response.status, 200);
+    assert.equal(tasks.length, 1);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "https://legacy-test.invalid/functions/v1/travel-offer-text");
+    assert.equal(calls[0].method, "POST");
+    assert.equal(calls[0].headers.get("X-Internal-Token"), "test-internal-token");
+    assert.equal(calls[0].headers.get("Content-Type"), "application/json");
+    assert.deepEqual(calls[0].body, { text: "Тур" });
+    backend.resolve(Response.json({ status: "ready", offer: { client_message: "Legacy ready" } }));
+    await Promise.all(tasks);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].url, "https://api.telegram.org/bottest-bot-token/sendMessage");
+    assert.deepEqual(calls[1].body, { chat_id: 123, text: "Legacy ready" });
+  } finally {
+    backend.resolve(Response.json({ status: "ready" }));
+    await Promise.allSettled(tasks);
+    globalThis.EdgeRuntime = previousRuntime;
+    if (previousUrl === undefined) Deno.env.delete("SUPABASE_URL");
+    else Deno.env.set("SUPABASE_URL", previousUrl);
+  }
+});
+
 type TelegramBody = {
   chat_id: number;
   text: string;
