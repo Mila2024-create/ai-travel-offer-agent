@@ -1,0 +1,249 @@
+# Local preparation only: no build, publication or deployment has been run.
+# source_sha must equal the selected workflow ref commit.
+# Source snapshot hashes normalize CRLF to LF for checkout portability.
+name: KT-02 isolated test image
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Approved full commit SHA containing the prepared snapshot and this workflow
+        required: true
+        type: string
+      confirmation:
+        description: Explicit publication approval for the KT-02 image repository only
+        required: true
+        type: choice
+        default: DO_NOT_PUBLISH
+        options:
+          - DO_NOT_PUBLISH
+          - KT02_TEST_ONLY
+permissions:
+  contents: read
+concurrency:
+  group: kt02-test-build-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  IMAGE_REPOSITORY: ai-travel-offer-bot.cr.cloud.ru/ai-travel-offer-kt02-test
+  SOURCE_SHA: ${{ inputs.source_sha }}
+  CONFIRMATION: ${{ inputs.confirmation }}
+jobs:
+  validate-and-publish-test-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require approval and exact source commit
+        run: |-
+          node <<'NODE'
+          const assert = require('node:assert/strict');
+          const e = process.env;
+          assert.equal(e.GITHUB_EVENT_NAME, 'workflow_dispatch');
+          assert.equal(e.GITHUB_REPOSITORY, 'Mila2024-create/ai-travel-offer-agent');
+          assert.equal(e.CONFIRMATION, 'KT02_TEST_ONLY');
+          assert.match(e.SOURCE_SHA || '', /^[0-9a-f]{40}$/);
+          assert.equal(e.SOURCE_SHA, e.GITHUB_SHA, 'Dispatch from the approved commit itself');
+          assert.equal(e.IMAGE_REPOSITORY, 'ai-travel-offer-bot.cr.cloud.ru/ai-travel-offer-kt02-test');
+          assert.match(e.GITHUB_RUN_ID || '', /^\d+$/);
+          assert.match(e.GITHUB_RUN_ATTEMPT || '', /^\d+$/);
+          NODE
+      - name: Checkout the approved commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify approved source snapshot
+        run: |-
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const crypto = require('node:crypto');
+          const assert = require('node:assert/strict');
+          const expected = {
+            ".dockerignore": "2e0ce5dbb1ac719ec195d246fa7795f8cd3a854fbe024c44e047adeba524450b",
+            ".env.example": "9d7bef5af74641c46477d37f47cd30755de5b7982ad003231906af7e25a5018d",
+            ".gitattributes": "fd3fb02fdb77705604ecaad928e6fb9fb844100141befd7333c258b3dd26f660",
+            ".github/workflows/cloudru-build.yml": "598ee35f4f7e71dae641c96951d2ab84eee47d660194fb513758afcb672f3d69",
+            ".gitignore": "0f92b3e43fa60ab3d04ce35de355c2f2489ebc2ddfe90e12d71ad85d7dce87e2",
+            "Dockerfile": "6290d623432173c8e3950beadc3ea3aecfed32db7f13333252fc08927ab848b3",
+            "MANIFEST.md": "692eb62c13dc9d3dbb05f2cde32499adc34a7f4bb731ad5ff33739059f412b6c",
+            "README.md": "1ba3fae18858dbaa909fc992452806d66793a1ff3b01783343dee7a615094f93",
+            "container/main.ts": "c3e47da5b3d29c710caab07d86d0bff5ff770031edd6b08b49af84bb51192533",
+            "deno.json": "a94022cff29586d634758d2b88f15a49f78062c7ef8275624caaa1cdd8cf36ea",
+            "deno.lock": "cfb7614e8065d99fe2234f380cc718a1a99cae6710aa1eb0ef4d046d986b5c10",
+            "docs/contracts/normalized-tour.md": "1752b683c7137d78ffb360bf045fb4db7e52236ffe9c42296b21f7fa9556f006",
+            "docs/contracts/tourvisor-api.md": "f27857f59f8e11f4520440f7ba24da67156d2a5863ad38cf305f29bd815669f2",
+            "docs/contracts/travel-offer.md": "367b4130311b595fa0a28b1ac938570ea854affb3438c1dc9942c697e5205837",
+            "docs/contracts/travel-request.md": "0a2ce712914b5cfaa748ea6f6c48d8bbc3229880b665459d7033cab69acb5b7d",
+            "docs/mock-data-spec.md": "882b955c8ede0ca6914fef185a0546a59d97b5356ff0985f47d333ebf6617c76",
+            "docs/product-spec.md": "865caa41cc880c39bb1e7904a563a6eabc6f4f922751e3aa85c6c9a8cc48ba1b",
+            "docs/ranking-rules.md": "11e3d00e8e2bd676aed0559b1ed524fff7df88f60d3a76107d06ebbfc3d33a59",
+            "stage-0-final-report.md": "93639f1169aa5fab597a94d5cc49d3f9342b6599e7ed1c8f2fa0f1307c507017",
+            "supabase/.gitignore": "507699eb91144818edf61d3a079212cacf31d8db520eae428e3b48fcf0d6919c",
+            "supabase/config.toml": "7704ec6ee54c7c91ebec2190446aeefa7ea51702a0b8ad7c70bffd1f117fa681",
+            "supabase/functions/_shared/diagnostics.ts": "bfb5f054710ee9e8a353524aa34b9b8661d804891fbaee81c1e17fbd5c7ce3a8",
+            "supabase/functions/_shared/errors/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "supabase/functions/_shared/normalization/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "supabase/functions/_shared/parser/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "supabase/functions/_shared/parser/llm-parser.ts": "2a61a85093f77f0565ffa6c7042bd6b6cefaf2e1dfc35826c810bdd94455d67c",
+            "supabase/functions/_shared/parser/validate.ts": "ee867837719da9ff765d33626b920ef6b5a654f87451a22878f2587de4ea8ffa",
+            "supabase/functions/_shared/potok-ingestion.ts": "280bc10e890ac5e5f1517d4ede459a1e0bbdb0b32a2094497247a93b03fabdc6",
+            "supabase/functions/_shared/ranking/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "supabase/functions/_shared/schemas/common.ts": "4a92b9ec978a72eedcbe559edb6e98db5815b7c9a09af536da56784cc519c087",
+            "supabase/functions/_shared/schemas/mod.ts": "44c8a996bbe309251c871a6777325885ed9410d52d00cf19e78faf8647998b5d",
+            "supabase/functions/_shared/schemas/normalized-tour.ts": "06428342c2187bf0c22eb3e542761c9ebb51242839e067b960aa54fd85778550",
+            "supabase/functions/_shared/schemas/ranking.ts": "fb1bf8a37aa5ec902c2266024ce486717125923dd4e2e1f1d6d275d95f318a1a",
+            "supabase/functions/_shared/schemas/tourvisor.ts": "795a488d3007a579ec7ac37587e1e709f859054ebcfe07a17a08723555fc2b07",
+            "supabase/functions/_shared/schemas/travel-offer.ts": "ae5ee278be2046955d190a580c9dab219489cd03d11939823b473499b0d1870b",
+            "supabase/functions/_shared/schemas/travel-request.ts": "5537a4a3f2db4b36f8795da9df22b5f74d7477f745bfc5da9ec68f6c30ac7b17",
+            "supabase/functions/_shared/schemas/workflow.ts": "167f06ab815ad73a04ae6cb0efa4b076bfc6f194d0278640027211cdd6d13e57",
+            "supabase/functions/_shared/spike/build-offer.ts": "945a89fd8c30e546667149b1c25b91d2f07069a4c6b704e6f2d1eb1ba475c0b6",
+            "supabase/functions/_shared/spike/pipeline.ts": "e483a47be0fd8601d23f80ec6e825b30ac53737269eacd77e552180e7af6ca51",
+            "supabase/functions/_shared/spike/types.ts": "efd9d25d19e1165288bf1912e2e37b2dd54586c5f7031bc54cc7283d5b5a7789",
+            "supabase/functions/_shared/tourvisor/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "supabase/functions/_shared/tourvisor/client.ts": "d8279853752d5c50547550b9f3e7a98f0f00719acad686dc6a4b7fcdeb5f31a0",
+            "supabase/functions/_shared/tourvisor/dictionaries.ts": "4fd5470e9732769d543f2c785b4e54555186cbd2c464c28896406740e6408cd3",
+            "supabase/functions/_shared/validation/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "supabase/functions/_shared/workflow/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "supabase/functions/_shared/writer/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "supabase/functions/telegram-webhook/deno.json": "ac06b588efa4669ce9749b446a60a3aae7e06a35d0072ed82e0c3bfc27495b21",
+            "supabase/functions/telegram-webhook/index.ts": "68a7cd14cf86eb4f34a96bc484c1c5983416ad8599ef5b05c43e35f9627980b5",
+            "supabase/functions/travel-offer-text/deno.json": "ac06b588efa4669ce9749b446a60a3aae7e06a35d0072ed82e0c3bfc27495b21",
+            "supabase/functions/travel-offer-text/index.ts": "b418c9fd90775020e972fa376384b2d4df651ce95bafc7e425aeedc8fab64073",
+            "supabase/functions/travel-offer/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "supabase/functions/travel-offer/index.ts": "5800a068d81ee8b518e5b0f8750ed3e813ecfa2c77ff122d8e7fba8d82ef09ff",
+            "tests/container/diagnostics.test.ts": "cf26ce78a9b3c3902e22722d8253b75e877589f4b0d55e491fb82a544f5622d4",
+            "tests/container/main.test.ts": "deacdda032536d1dee77d713621bbd09efc1793eba9c82e08038dca760d7d024",
+            "tests/fixtures/tourvisor/README.md": "9bf0f752c889c3c6e443e6a3023eabc45bf54354414dae7664a2ca4a941c9730",
+            "tests/fixtures/tourvisor/countries.json": "46807322631c800ceea3275bd4d10f972f0126826813d308141cea1388efddf1",
+            "tests/fixtures/tourvisor/departures.json": "30fbb6ed20e5b166a27eb73eea094c71d1a2db6adc30a58771b31e768154f728",
+            "tests/fixtures/tourvisor/expected/normalized-tours-summary.json": "8ca87d1f9850d464c807a1bc2a190e7d87cf480a6250091bd1c0fa480f1db8d4",
+            "tests/fixtures/tourvisor/meals.json": "abe4d570d65eb963d62cbc553e6a1c10261b1b32f306d499bc0af5230ecb2d0c",
+            "tests/fixtures/tourvisor/search-complete.json": "6f2537bd4270a7c0313fbc8d50004fd6cc9614e05f8c396250a65e81858fb936",
+            "tests/fixtures/tourvisor/search-empty.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+            "tests/fixtures/tourvisor/search-error.json": "b0b6e61cc317667ef93065681fe33d116ee9d1977accce756f254e8c02d16faf",
+            "tests/fixtures/tourvisor/search-invalid-response.json": "2564513e970963a03edec649722842dfe6134465bfc72b25b2952d7afcf03644",
+            "tests/fixtures/tourvisor/search-partial-timeout.json": "869fe0b1f6c57535a80f51c0137293bc3e096012111a961c92913d6974e80426",
+            "tests/fixtures/tourvisor/search-processing.json": "df1b183808cb3a863ebcca665b95cc1618d2011be3d31c0af3e1fc295e63a245",
+            "tests/fixtures/tourvisor/search-results.json": "511d5b9e6b60f020b34cbbaba85394800cf65798e3db8f8c2adddfab98351a05",
+            "tests/fixtures/tourvisor/search-start-success.json": "19f958a54a5cc3c8d515638af5bd24a3a41b75a2b6ebc53d1d8d8b4aab058bc7",
+            "tests/fixtures/tourvisor/tour-flights-unavailable.json": "45db42354eb3aa0da05bf3a0d6331d153842472b9eaf2d9d7a24901ccfae6330",
+            "tests/integration/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "tests/parser/llm-parser.test.ts": "76969af5e5eb7ae6145d214c4b54228094545312bb505d535e183d4663ce91aa",
+            "tests/spike/endpoint.test.ts": "f81d91b14b7ab54890ca8a8e94a97b3464afc309259993c94dd16b87585e311d",
+            "tests/spike/pipeline.test.ts": "5bc820c4b7fc52779a39eb5622ab039004343b4dcbc50203404cc070b855ff24",
+            "tests/telegram-webhook/webhook.test.ts": "624a33fa7fee7a224ce73dbad87af9dd8f9f853e7d11d82d422993c7c9937594",
+            "tests/tourvisor/client.test.ts": "cd7594efc6a33de2d6b1793d5f5df7322465ef5754c526fdd6444922b591d77e",
+            "tests/unit/potok-ingestion.test.ts": "f34e116867383b4c4c702e22f5a05562210920c15ccad8a26cfc31457bdfa644",
+            "tests/unit/schemas/normalized-tour.test.ts": "e5c68bd9a455c24d0113dd5f2610088926b8a969370aa12c596ee889d4f428fd",
+            "tests/unit/schemas/ranking.test.ts": "f98938635d6c8da48dde614c078facbdf45e80882294be4191bc903a161a3b43",
+            "tests/unit/schemas/tourvisor.test.ts": "4709054131b7a5c2847592c9640920c5a7cda610c0b816d04b9a1a9299dcdf4e",
+            "tests/unit/schemas/travel-offer.test.ts": "08bd04ac54dafee5de0da3c2d2a23212f8a776aa1097c58d6130165f6cc48dc3",
+            "tests/unit/schemas/travel-request.test.ts": "8fd891102042030290f4046da4e3a3cf2034b797765852a787f09b70da378b1b",
+            "tests/unit/schemas/workflow.test.ts": "7668e6964647b5979ab2b5fdb5c681448810342c33078b61a8234c3858d8a68b"
+          };
+
+          const workflow = '.github/workflows/kt02-test-build.yml';
+          function walk(dir = '.', prefix = '') {
+            return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+              const relative = prefix + entry.name;
+              if (relative === '.git') return [];
+              assert.ok(!entry.isSymbolicLink(), 'Symlinks are not allowed: ' + relative);
+              return entry.isDirectory() ? walk(path.join(dir, entry.name), relative + '/') : [relative];
+            });
+          }
+          assert.deepEqual(walk().sort(), [...Object.keys(expected), workflow].sort(), 'Unexpected or missing source files');
+          for (const [file, hash] of Object.entries(expected)) {
+            const text = fs.readFileSync(file).toString('utf8').replaceAll('\r\n', '\n');
+            assert.equal(crypto.createHash('sha256').update(text).digest('hex'), hash, 'Source mismatch: ' + file);
+          }
+          const lock = JSON.parse(fs.readFileSync('deno.lock', 'utf8'));
+          assert.deepEqual(Object.keys(lock.npm).sort(), ['@types/node@24.2.0', 'undici-types@7.10.0', 'zod@4.4.3']);
+          assert.equal(lock.specifiers['npm:@types/node@*'], '24.2.0');
+          assert.equal(lock.specifiers['npm:zod@4.4.3'], '4.4.3');
+          console.log('Approved snapshot verified: 81 files, CRLF normalized to LF.');
+          NODE
+      - name: Set up Deno 2.5.6
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.5.6
+      - name: Check types and mocked tests with frozen dependencies
+        run: |-
+          deno --version
+          mapfile -t test_files < <(find tests/unit tests/parser tests/tourvisor tests/spike tests/telegram-webhook tests/container -type f -name '*.test.ts' | sort)
+          deno cache --frozen container/main.ts supabase/functions/telegram-webhook/index.ts "${test_files[@]}"
+          deno check --frozen container/main.ts supabase/functions/telegram-webhook/index.ts "${test_files[@]}"
+          deno test --cached-only --frozen --deny-net --deny-import --allow-read --allow-env=OPENROUTER_API_KEY,OPENROUTER_MODEL,TOURVISOR_JWT,SUPABASE_URL tests/unit tests/parser tests/tourvisor tests/spike tests/telegram-webhook tests/container
+          git diff --exit-code -- deno.lock
+        env:
+          DENO_DIR: ${{ runner.temp }}/kt02-deno-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Form unique test image tag
+        id: image
+        run: |-
+          node <<'NODE'
+          const fs = require('node:fs');
+          const assert = require('node:assert/strict');
+          const e = process.env;
+          assert.match(e.SOURCE_SHA, /^[0-9a-f]{40}$/);
+          assert.match(e.GITHUB_RUN_ID, /^\d+$/);
+          assert.match(e.GITHUB_RUN_ATTEMPT, /^\d+$/);
+          assert.equal(e.IMAGE_REPOSITORY, 'ai-travel-offer-bot.cr.cloud.ru/ai-travel-offer-kt02-test');
+          const tag = 'kt02-' + e.SOURCE_SHA + '-' + e.GITHUB_RUN_ID + '-' + e.GITHUB_RUN_ATTEMPT;
+          fs.appendFileSync(e.GITHUB_OUTPUT, 'image=' + e.IMAGE_REPOSITORY + ':' + tag + '\n');
+          NODE
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to the container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ai-travel-offer-bot.cr.cloud.ru
+          username: ${{ secrets.CLOUDRU_REGISTRY_USERNAME }}
+          password: ${{ secrets.CLOUDRU_REGISTRY_PASSWORD }}
+      - name: Build and publish only the KT-02 image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.image }}
+          labels: org.opencontainers.image.revision=${{ inputs.source_sha }}
+          provenance: false
+          sbom: false
+      - name: Record published digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_TAG: ${{ steps.image.outputs.image }}
+        run: |-
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const assert = require('node:assert/strict');
+          const e = process.env;
+          assert.match(e.IMAGE_DIGEST || '', /^sha256:[0-9a-f]{64}$/);
+          assert.ok(e.IMAGE_TAG.startsWith(e.IMAGE_REPOSITORY + ':kt02-'));
+          const result = {
+            repository: e.IMAGE_REPOSITORY,
+            tag: e.IMAGE_TAG,
+            digest: e.IMAGE_DIGEST,
+            immutable_reference: e.IMAGE_REPOSITORY + '@' + e.IMAGE_DIGEST,
+            source_commit: e.SOURCE_SHA,
+            run_id: e.GITHUB_RUN_ID,
+            run_attempt: e.GITHUB_RUN_ATTEMPT,
+            approved_base_archive_sha256: '11b67ac3bb5689f32ba760b5da8b4fe7771ed951186f893a8f9e8eb2f6d036c1',
+          };
+          const destination = path.join(e.RUNNER_TEMP, 'kt02-image');
+          fs.mkdirSync(destination, { recursive: true });
+          fs.writeFileSync(path.join(destination, 'image.json'), JSON.stringify(result, null, 2) + '\n');
+          fs.appendFileSync(e.GITHUB_STEP_SUMMARY, 'KT-02 image: ' + result.immutable_reference + '\n\nSource commit: ' + e.SOURCE_SHA + '\n');
+          NODE
+      - name: Save digest and source provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: kt02-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kt02-image/image.json
+          if-no-files-found: error
+          retention-days: 90
