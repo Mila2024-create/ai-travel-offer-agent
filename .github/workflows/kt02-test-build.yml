@@ -173,6 +173,7 @@ jobs:
         run: |-
           deno --version
           mapfile -t test_files < <(find tests/unit tests/parser tests/tourvisor tests/spike tests/telegram-webhook tests/container -type f -name '*.test.ts' | sort)
+          deno cache --frozen container/main.ts supabase/functions/telegram-webhook/index.ts "${test_files[@]}"
           deno check --frozen container/main.ts supabase/functions/telegram-webhook/index.ts "${test_files[@]}"
           deno test --cached-only --frozen --deny-net --deny-import --allow-read --allow-env=OPENROUTER_API_KEY,OPENROUTER_MODEL,TOURVISOR_JWT,SUPABASE_URL tests/unit tests/parser tests/tourvisor tests/spike tests/telegram-webhook tests/container
           git diff --exit-code -- deno.lock
