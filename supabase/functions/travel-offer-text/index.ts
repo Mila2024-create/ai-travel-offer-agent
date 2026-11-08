@@ -1,3 +1,4 @@
+import { logEntry } from "../_shared/diagnostics.ts";
 import { type ParsedRequest, ParserConfigError, parseText } from "../_shared/parser/llm-parser.ts";
 import { validateAndResolve } from "../_shared/parser/validate.ts";
 import { DictionaryResolver } from "../_shared/tourvisor/dictionaries.ts";
@@ -30,7 +31,7 @@ type LogEntry = {
 };
 
 function safeLog(entry: LogEntry): void {
-  console.error(JSON.stringify(entry));
+  logEntry(entry);
 }
 
 function tourCandidateToSpikeTour(candidates: TourCandidate[], countryId: number): SpikeTour[] {

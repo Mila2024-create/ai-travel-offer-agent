@@ -1,3 +1,4 @@
+import { logEntry } from "../diagnostics.ts";
 export const TOURVISOR_BASE_URL = "https://api.tourvisor.ru/search/api/v1";
 
 export class TourvisorError extends Error {
@@ -151,7 +152,7 @@ async function tvFetch(
           if (field in record) safeError[field] = record[field];
         }
       }
-      console.error(JSON.stringify(safeError));
+      logEntry(safeError);
     }
     const safeMessage = `Tourvisor API returned HTTP ${res.status}`;
     throw new TourvisorError(safeMessage, "HTTP_ERROR", res.status);
@@ -167,10 +168,10 @@ export async function startSearch(
   const fetchFn = options.fetchFn ?? defaultFetch;
   const params = buildTourvisorParams(input);
   const url = buildUrl(baseUrl, "/tours/search", params);
-  console.error(JSON.stringify({
+  logEntry({
     stage: "start_search",
     query_string: params.toString(),
-  }));
+  });
 
   const res = await tvFetch(url, options.jwt, fetchFn, options.signal);
   const body = await res.json() as Record<string, unknown>;

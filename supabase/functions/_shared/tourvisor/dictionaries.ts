@@ -1,3 +1,4 @@
+import { logEntry as writeLog } from "../diagnostics.ts";
 import { TOURVISOR_BASE_URL, TourvisorError } from "./client.ts";
 
 export type DictionaryItem = { id: number; name: string };
@@ -76,7 +77,7 @@ async function fetchItems(
     logEntry.pathname = path;
     logEntry.query_string = query.toString();
   }
-  console.error(JSON.stringify(logEntry));
+  writeLog(logEntry);
   if (!isArray) {
     throw new TourvisorError(
       "Dictionary response is not an array",

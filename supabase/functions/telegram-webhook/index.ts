@@ -1,8 +1,10 @@
+import { classifySafeError, currentDiagnostics, logEntry } from "../_shared/diagnostics.ts";
 declare global {
   var EdgeRuntime: { waitUntil: (promise: Promise<unknown>) => void } | undefined;
 }
 
 export type WebhookConfig = {
+  diagnosticsEnabled?: boolean;
   telegramBotToken?: string;
   webhookSecret?: string;
   allowedUserIds?: string;
@@ -37,8 +39,10 @@ function splitMessage(text: string, maxLen = SPLIT_MAX_LEN): string[] {
     const slice = remaining.slice(0, maxLen);
     const lastParagraph = slice.lastIndexOf("\n\n");
     const lastNewline = slice.lastIndexOf("\n");
-    const breakAt = lastParagraph > 0 ? lastParagraph + 2
-      : lastNewline > 0 ? lastNewline + 1
+    const breakAt = lastParagraph > 0
+      ? lastParagraph + 2
+      : lastNewline > 0
+      ? lastNewline + 1
       : maxLen;
     parts.push(remaining.slice(0, breakAt).trimEnd());
     remaining = remaining.slice(breakAt).trimStart();
@@ -56,17 +60,42 @@ async function sendTelegramMessage(
   const fetchFn = config.fetchFn ?? fetch;
   const body: Record<string, unknown> = { chat_id: chatId, text };
   if (replyMarkup) body.reply_markup = replyMarkup;
+  const diag = currentDiagnostics();
+  const started = performance.now();
+  const sendSeq = diag ? ++diag.sendAttempts : undefined;
+  diag?.emit({ stage: "telegram_api", event: "start", send_seq: sendSeq });
   try {
     const res = await fetchFn(`${TELEGRAM_API_BASE}/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!res.ok) {
-      console.error(JSON.stringify({ stage: "telegram_api", status: res.status }));
+    if (diag) {
+      if (!res.ok) diag.sendFailures++;
+      diag.emit({
+        stage: "telegram_api",
+        event: "end",
+        send_seq: sendSeq,
+        result: res.ok ? "http_ok" : "http_error",
+        http_status: res.status,
+        duration_ms: performance.now() - started,
+      });
+    } else if (!res.ok) {
+      logEntry({ stage: "telegram_api", status: res.status });
     }
-  } catch {
-    console.error(JSON.stringify({ stage: "telegram_api", error: "SEND_FAILED" }));
+  } catch (error: unknown) {
+    if (diag) {
+      diag.sendFailures++;
+      diag.emit({
+        stage: "telegram_api",
+        event: "end",
+        send_seq: sendSeq,
+        result: "exception",
+        error: "SEND_FAILED",
+        ...classifySafeError(error),
+        duration_ms: performance.now() - started,
+      });
+    } else logEntry({ stage: "telegram_api", error: "SEND_FAILED" });
   }
 }
 
@@ -74,12 +103,14 @@ async function callBackend(
   text: string,
   config: WebhookConfig,
 ): Promise<Record<string, unknown>> {
-  const backendUrl = config.backendHandler ? "http://internal/travel-offer-text" : config.backendUrl ??
-    (Deno.env.get("SUPABASE_URL")
-      ? `${Deno.env.get("SUPABASE_URL")}/functions/v1/travel-offer-text`
-      : "");
+  const backendUrl = config.backendHandler
+    ? "http://internal/travel-offer-text"
+    : config.backendUrl ??
+      (Deno.env.get("SUPABASE_URL")
+        ? `${Deno.env.get("SUPABASE_URL")}/functions/v1/travel-offer-text`
+        : "");
   if (!backendUrl) {
-    console.error(JSON.stringify({ stage: "backend", error: "SUPABASE_URL not configured" }));
+    logEntry({ stage: "backend", error: "SUPABASE_URL not configured" });
     return { status: "error", message: "Ошибка обработки запроса." };
   }
   const internalToken = config.internalApiToken ?? Deno.env.get("INTERNAL_API_TOKEN") ?? "";
@@ -96,7 +127,7 @@ async function callBackend(
     ? await config.backendHandler(new Request(backendUrl, init))
     : await fetchFn(backendUrl, init);
   if (!res.ok) {
-    console.error(JSON.stringify({ stage: "backend", status: res.status }));
+    logEntry({ stage: "backend", status: res.status });
     return { status: "error", message: "Ошибка обработки запроса." };
   }
   return await res.json() as Record<string, unknown>;
@@ -115,15 +146,25 @@ export async function processTelegramUpdate(
   const userId = (message.from as Record<string, unknown>)?.id as number;
 
   const allowedRaw = config.allowedUserIds ?? Deno.env.get("TELEGRAM_ALLOWED_USER_IDS") ?? "";
-  const allowedIds = allowedRaw.split(",").map((s) => parseInt(s.trim(), 10)).filter(Number.isFinite);
+  const allowedIds = allowedRaw.split(",").map((s) => parseInt(s.trim(), 10)).filter(
+    Number.isFinite,
+  );
   if (!allowedIds.includes(userId)) return;
 
   if (text.startsWith("/start")) {
-    await sendTelegramMessage(chatId, "Добро пожаловать! Отправьте мне описание желаемого тура, и я подберу лучшие варианты.", config);
+    await sendTelegramMessage(
+      chatId,
+      "Добро пожаловать! Отправьте мне описание желаемого тура, и я подберу лучшие варианты.",
+      config,
+    );
     return;
   }
   if (text.startsWith("/help")) {
-    await sendTelegramMessage(chatId, "Отправьте описание желаемого тура, например: «Хочу в Турцию на двоих на неделю в августе».", config);
+    await sendTelegramMessage(
+      chatId,
+      "Отправьте описание желаемого тура, например: «Хочу в Турцию на двоих на неделю в августе».",
+      config,
+    );
     return;
   }
 
@@ -148,10 +189,25 @@ async function processBackendResponse(
   config: WebhookConfig,
 ): Promise<void> {
   let backendResponse: Record<string, unknown>;
+  const diag = currentDiagnostics();
+  const started = performance.now();
+  diag?.emit({ stage: "backend", event: "start" });
   try {
     backendResponse = await callBackend(text, config);
+    diag?.emit({
+      stage: "backend",
+      event: "end",
+      result: "completed",
+      duration_ms: performance.now() - started,
+    });
   } catch {
-    console.error(JSON.stringify({ stage: "backend", error: "BACKEND_FAILED" }));
+    logEntry({
+      stage: "backend",
+      error: "BACKEND_FAILED",
+      ...(diag
+        ? { event: "end", result: "exception", duration_ms: performance.now() - started }
+        : {}),
+    });
     await sendTelegramMessage(chatId, "Ошибка обработки запроса.", config);
     return;
   }
@@ -233,6 +289,7 @@ export async function handleTelegramWebhook(
       return json({ error: "Invalid request body" }, 400);
     }
     update = parsed as Record<string, unknown>;
+    currentDiagnostics()?.setUpdateId(update.update_id);
   } catch {
     return json({ error: "Invalid request body" }, 400);
   }

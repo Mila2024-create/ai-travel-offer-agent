@@ -1,3 +1,4 @@
+import { diagnoseRequest, logEntry } from "../supabase/functions/_shared/diagnostics.ts";
 import {
   handleTelegramWebhook,
   type WebhookConfig,
@@ -14,7 +15,7 @@ export function createContainerHandler(config: WebhookConfig = {}) {
         fetchFn: config.fetchFn,
       })),
   };
-  return async (request: Request): Promise<Response> => {
+  const handle = async (request: Request): Promise<Response> => {
     const path = new URL(request.url).pathname;
     const method = path === "/health" ? "GET" : path === "/telegram-webhook" ? "POST" : null;
     if (!method) return new Response("Not found", { status: 404 });
@@ -25,10 +26,14 @@ export function createContainerHandler(config: WebhookConfig = {}) {
     try {
       return await handleTelegramWebhook(request, webhookConfig);
     } catch {
-      console.error(JSON.stringify({ stage: "webhook", error: "PROCESSING_FAILED" }));
+      logEntry({ stage: "webhook", error: "PROCESSING_FAILED" });
       return Response.json({ error: "Internal server error" }, { status: 500 });
     }
   };
+  return (request: Request): Promise<Response> =>
+    config.diagnosticsEnabled === true && new URL(request.url).pathname === "/telegram-webhook"
+      ? diagnoseRequest(() => handle(request))
+      : handle(request);
 }
 
 export function containerPort(value = Deno.env.get("PORT")): number {
@@ -40,5 +45,10 @@ export function containerPort(value = Deno.env.get("PORT")): number {
 }
 
 if (import.meta.main) {
-  Deno.serve({ hostname: "0.0.0.0", port: containerPort() }, createContainerHandler());
+  Deno.serve(
+    { hostname: "0.0.0.0", port: containerPort() },
+    createContainerHandler({
+      diagnosticsEnabled: Deno.env.get("KT02_DIAGNOSTICS") === "true",
+    }),
+  );
 }
