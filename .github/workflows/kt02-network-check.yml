@@ -1,0 +1,75 @@
+name: KT-02 network check image
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Approve publication to the KT-02 network check repository
+        required: true
+        type: choice
+        default: DO_NOT_PUBLISH
+        options:
+          - DO_NOT_PUBLISH
+          - PUBLISH_KT02_NETWORK_CHECK
+
+permissions: {}
+
+concurrency:
+  group: kt02-network-check-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'Mila2024-create/ai-travel-offer-agent' &&
+      inputs.confirmation == 'PUBLISH_KT02_NETWORK_CHECK'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Copy the pinned curl image to Cloud.ru
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CLOUDRU_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CLOUDRU_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          # Official curlimages/curl 8.23.0, linux/amd64 manifest.
+          readonly source_image='docker.io/curlimages/curl@sha256:3b8fde20978e330b401837f24b871ebe2c8d14ff7f07b87990bcd832588a1a75'
+          readonly registry='ai-travel-offer-bot.cr.cloud.ru'
+          readonly repository="${registry}/kt02-network-check"
+          readonly tag="kt02-curl-8.23.0-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          readonly destination="${repository}:${tag}"
+
+          if [[ -z "$REGISTRY_USERNAME" || -z "$REGISTRY_PASSWORD" ]]; then
+            echo '::error::The Cloud.ru registry credentials are unavailable.'
+            exit 1
+          fi
+
+          temp_dir=$(mktemp -d "${RUNNER_TEMP}/kt02-network-check.XXXXXX")
+          trap 'rm -f -- "$temp_dir/auth.json" "$temp_dir/digest"; rmdir -- "$temp_dir"' EXIT
+          auth_file="$temp_dir/auth.json"
+          printf '%s\n' "$REGISTRY_PASSWORD" |
+            skopeo login --authfile "$auth_file" --username "$REGISTRY_USERNAME" --password-stdin "$registry"
+          unset REGISTRY_USERNAME REGISTRY_PASSWORD
+
+          if probe_error=$(skopeo inspect --raw --authfile "$auth_file" "docker://$destination" 2>&1 >/dev/null); then
+            echo "::error::Destination tag already exists: $destination"
+            exit 1
+          fi
+          if ! grep -Eq ': (manifest unknown|name unknown)(:|[[:space:]"]*$)' <<< "$probe_error"; then
+            echo "::error::Could not verify that the destination tag is absent: $destination"
+            exit 1
+          fi
+
+          skopeo copy --dest-authfile "$auth_file" --format v2s2 --digestfile "$temp_dir/digest" \
+            "docker://$source_image" "docker://$destination"
+
+          digest=$(cat "$temp_dir/digest")
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo '::error::The copy did not report a valid destination digest.'
+            exit 1
+          fi
+          printf '### KT-02 network check image\n\nTag: `%s`\n\nDigest reference: `%s@%s`\n' \
+            "$destination" "$repository" "$digest" >> "$GITHUB_STEP_SUMMARY"
